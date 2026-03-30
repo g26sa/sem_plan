@@ -35,7 +35,7 @@ import {
 import { useMemo, useRef, useState } from 'react'
 import { db, type TransactionType } from '../db'
 import { formatCurrency, startOfMonthISO, todayISO } from '../utils/format'
-import { saveBlobToDirectory } from '../utils/saveToDirectory'
+import { saveBlobToLocation } from '../utils/saveToDirectory'
 
 function safeFilename(name: string) {
   return name.replaceAll(/[<>:"/\\|?*]/g, '-').replaceAll(/\s+/g, ' ').trim()
@@ -233,7 +233,7 @@ const ReportsPage = () => {
       `family-finance-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`,
     )
 
-    const saved = await saveBlobToDirectory(blob, name)
+    const saved = await saveBlobToLocation(blob, name)
     if (!saved) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -448,7 +448,7 @@ const ReportsPage = () => {
     const title = reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств'
     const filename = safeFilename(`${title} (${periodLabel}).docx`)
 
-    const saved = await saveBlobToDirectory(blob, filename)
+    const saved = await saveBlobToLocation(blob, filename)
     if (!saved) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
