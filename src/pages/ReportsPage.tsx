@@ -252,12 +252,6 @@ const ReportsPage = () => {
       `family-finance-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`,
     )
     await saveBlobToChosenDirectory(fileName, blob)
-
-    // Open immediately (JSON will usually open in-browser).
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener,noreferrer')
-    // Note: URL revocation can break preview in some browsers; keep it for a short time.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
 
   const importBackup = async (file: File) => {
@@ -468,7 +462,8 @@ const ReportsPage = () => {
 
     const url = URL.createObjectURL(blob)
     window.open(url, '_blank', 'noopener,noreferrer')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    // Do not revoke quickly; some browsers delay handing the docx to Word.
+    setTimeout(() => URL.revokeObjectURL(url), 5 * 60_000)
   }
 
   return (
