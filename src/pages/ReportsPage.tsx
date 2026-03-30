@@ -459,11 +459,6 @@ const ReportsPage = () => {
     const title = reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств'
     const fileName = safeFilename(`${title} (${periodLabel}).docx`)
     await saveBlobToChosenDirectory(fileName, blob)
-
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener,noreferrer')
-    // Do not revoke quickly; some browsers delay handing the docx to Word.
-    setTimeout(() => URL.revokeObjectURL(url), 5 * 60_000)
   }
 
   return (
