@@ -5,12 +5,15 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   FormControl,
   InputLabel,
   MenuItem,
   Paper,
   Select,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
@@ -48,16 +51,19 @@ const ReportsPage = () => {
   const [to, setTo] = useState(todayISO())
   const [type, setType] = useState<'all' | TransactionType>('all')
   const [groupBy, setGroupBy] = useState<'category' | 'account'>('category')
+  const [reportTab, setReportTab] = useState(0) // 0: сводка, 1: все операции
 
   const fileRef = useRef<HTMLInputElement | null>(null)
 
   const data = useLiveQuery(async () => {
-    const [txs, categories, accounts] = await Promise.all([
+    const [txs, categories, accounts, members, goals] = await Promise.all([
       db.transactions.toArray(),
       db.categories.toArray(),
       db.accounts.toArray(),
+      db.members.toArray(),
+      db.goals.toArray(),
     ])
-    return { txs, categories, accounts }
+    return { txs, categories, accounts, members, goals }
   }, [])
 
   const nameByCategoryId = useMemo(() => {
@@ -71,6 +77,18 @@ const ReportsPage = () => {
     for (const a of data?.accounts ?? []) if (a.id != null) m.set(a.id, a.name)
     return m
   }, [data?.accounts])
+
+  const nameByMemberId = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const mm of data?.members ?? []) if (mm.id != null) m.set(mm.id, mm.name)
+    return m
+  }, [data?.members])
+
+  const nameByGoalId = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const g of data?.goals ?? []) if (g.id != null) m.set(g.id, g.name)
+    return m
+  }, [data?.goals])
 
   const filtered = useMemo(() => {
     return (data?.txs ?? [])
@@ -111,6 +129,35 @@ const ReportsPage = () => {
     }))
   }, [filtered, groupBy, nameByAccountId, nameByCategoryId])
 
+  const opsRows = useMemo(() => {
+    return (filtered ?? []).map((t) => {
+      const acc = nameByAccountId.get(t.accountId) ?? `#${t.accountId}`
+      const cat = nameByCategoryId.get(t.categoryId) ?? `#${t.categoryId}`
+      const member = t.memberId ? nameByMemberId.get(t.memberId) ?? `#${t.memberId}` : '—'
+      const goal = t.goalId ? nameByGoalId.get(t.goalId) ?? `#${t.goalId}` : '—'
+
+      const income = t.type === 'income' ? t.amount : 0
+      const expense = t.type === 'expense' ? t.amount : 0
+      const net = t.type === 'income' ? t.amount : t.type === 'expense' ? -t.amount : 0
+
+      return {
+        id: t.id!,
+        date: t.date,
+        type: t.type,
+        account: acc,
+        category: cat,
+        member,
+        goal,
+        income,
+        expense,
+        net,
+        description: t.description ?? '',
+        counterparty: t.counterparty ?? '',
+        raw: t,
+      }
+    })
+  }, [filtered, nameByAccountId, nameByCategoryId, nameByMemberId, nameByGoalId])
+
   const columns = useMemo<GridColDef[]>(
     () => [
       { field: 'name', headerName: groupBy === 'category' ? 'Категория' : 'Счёт', flex: 1, minWidth: 220 },
@@ -134,6 +181,34 @@ const ReportsPage = () => {
       },
     ],
     [groupBy],
+  )
+
+  const opsColumns = useMemo<GridColDef[]>(
+    () => [
+      { field: 'date', headerName: 'Дата', width: 110 },
+      {
+        field: 'type',
+        headerName: 'Тип',
+        width: 95,
+        renderCell: (p) =>
+          p.value === 'income' ? <Chip size="small" color="success" label="Доход" /> : <Chip size="small" color="error" label="Расход" />,
+      },
+      { field: 'category', headerName: 'Категория', width: 200 },
+      { field: 'account', headerName: 'Счёт', width: 180 },
+      { field: 'member', headerName: 'Кто', width: 140 },
+      { field: 'goal', headerName: 'Цель', width: 180 },
+      {
+        field: 'net',
+        headerName: 'Сумма',
+        width: 140,
+        align: 'right',
+        headerAlign: 'right',
+        valueGetter: (_v, row) => formatCurrency(row.net, 'RUB'),
+      },
+      { field: 'counterparty', headerName: 'Контрагент', width: 190 },
+      { field: 'description', headerName: 'Описание', flex: 1, minWidth: 220 },
+    ],
+    [],
   )
 
   const exportBackup = async () => {
@@ -236,14 +311,14 @@ const ReportsPage = () => {
       insideV: { style: BorderStyle.SINGLE, size: 6, color: '000000' },
     }
 
-    const tableRows: TableRow[] = [
+    const makeHeaderTitle = (text: string) =>
       new TableRow({
         children: [
           new TableCell({
             width: { size: 40, type: WidthType.PERCENTAGE },
             children: [
               new Paragraph({
-                children: [new TextRun({ text: groupBy === 'category' ? 'Категория' : 'Счёт', bold: true })],
+                children: [new TextRun({ text, bold: true })],
               }),
             ],
           }),
@@ -275,25 +350,44 @@ const ReportsPage = () => {
             ],
           }),
         ],
-      }),
-      ...rows.map(
-        (r) =>
-          new TableRow({
-            children: [
-              new TableCell({ children: [new Paragraph(r.name)] }),
-              new TableCell({
-                children: [new Paragraph({ text: formatCurrency(r.income), alignment: AlignmentType.LEFT })],
-              }),
-              new TableCell({
-                children: [new Paragraph({ text: formatCurrency(r.expense), alignment: AlignmentType.LEFT })],
-              }),
-              new TableCell({
-                children: [new Paragraph({ text: formatCurrency(r.net), alignment: AlignmentType.LEFT })],
-              }),
-            ],
-          }),
-      ),
-    ]
+      })
+
+    const tableRows: TableRow[] =
+      reportTab === 1
+        ? [
+            makeHeaderTitle('Категория'),
+            ...opsRows.map(
+              (r) =>
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph(r.category)] }),
+                    new TableCell({ children: [new Paragraph({ text: formatCurrency(r.income), alignment: AlignmentType.LEFT })] }),
+                    new TableCell({ children: [new Paragraph({ text: formatCurrency(r.expense), alignment: AlignmentType.LEFT })] }),
+                    new TableCell({ children: [new Paragraph({ text: formatCurrency(r.net), alignment: AlignmentType.LEFT })] }),
+                  ],
+                }),
+            ),
+          ]
+        : [
+            makeHeaderTitle(groupBy === 'category' ? 'Категория' : 'Счёт'),
+            ...rows.map(
+              (r) =>
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph(r.name)] }),
+                    new TableCell({
+                      children: [new Paragraph({ text: formatCurrency(r.income), alignment: AlignmentType.LEFT })],
+                    }),
+                    new TableCell({
+                      children: [new Paragraph({ text: formatCurrency(r.expense), alignment: AlignmentType.LEFT })],
+                    }),
+                    new TableCell({
+                      children: [new Paragraph({ text: formatCurrency(r.net), alignment: AlignmentType.LEFT })],
+                    }),
+                  ],
+                }),
+            ),
+          ]
 
     const doc = new Document({
       sections: [
@@ -305,7 +399,7 @@ const ReportsPage = () => {
               spacing: { after: 240 },
               children: [
                 new TextRun({
-                  text: 'Отчёт по движениям средств',
+                  text: reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств',
                   bold: true,
                   underline: {},
                 }),
@@ -346,7 +440,8 @@ const ReportsPage = () => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = safeFilename(`Отчёт по движениям средств (${periodLabel}).docx`)
+    const title = reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств'
+    a.download = safeFilename(`${title} (${periodLabel}).docx`)
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -361,6 +456,15 @@ const ReportsPage = () => {
           Сводка доходов и расходов за выбранный период. Можно распечатать, сохранить резервную копию или восстановить
           данные.
         </Typography>
+        <Tabs
+          value={reportTab}
+          onChange={(_e, v) => setReportTab(v)}
+          className="no-print"
+          sx={{ mt: 1 }}
+        >
+          <Tab label="Сводка" value={0} />
+          <Tab label="Все операции" value={1} />
+        </Tabs>
       </Box>
 
       <Paper elevation={3} sx={{ p: 2 }} className="no-print">
@@ -399,19 +503,21 @@ const ReportsPage = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={2}>
-            <FormControl fullWidth>
-              <InputLabel>Группировка</InputLabel>
-              <Select
-                label="Группировка"
-                value={groupBy}
-                onChange={(e) => setGroupBy(e.target.value as 'category' | 'account')}
-              >
-                <MenuItem value="category">По категориям</MenuItem>
-                <MenuItem value="account">По счетам</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
+          {reportTab === 0 && (
+            <Grid item xs={12} md={2}>
+              <FormControl fullWidth>
+                <InputLabel>Группировка</InputLabel>
+                <Select
+                  label="Группировка"
+                  value={groupBy}
+                  onChange={(e) => setGroupBy(e.target.value as 'category' | 'account')}
+                >
+                  <MenuItem value="category">По категориям</MenuItem>
+                  <MenuItem value="account">По счетам</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
           <Grid item xs={12} md={4}>
             <Stack
               direction="row"
@@ -473,50 +579,86 @@ const ReportsPage = () => {
         </Stack>
       </Paper>
 
-      <Paper elevation={3} sx={{ height: 560 }} className="no-print">
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          disableRowSelectionOnClick
-          pageSizeOptions={[10, 25, 50]}
-          initialState={{
-            pagination: { paginationModel: { pageSize: 25, page: 0 } },
-            sorting: { sortModel: [{ field: 'expense', sort: 'desc' }] },
-          }}
-        />
-      </Paper>
+      {reportTab === 0 ? (
+        <Paper elevation={3} sx={{ height: 560 }} className="no-print">
+          <DataGrid
+            rows={rows}
+            columns={columns}
+            disableRowSelectionOnClick
+            pageSizeOptions={[10, 25, 50]}
+            initialState={{
+              pagination: { paginationModel: { pageSize: 25, page: 0 } },
+              sorting: { sortModel: [{ field: 'expense', sort: 'desc' }] },
+            }}
+          />
+        </Paper>
+      ) : (
+        <Paper elevation={3} sx={{ height: 560 }} className="no-print">
+          <DataGrid
+            rows={opsRows}
+            columns={opsColumns}
+            disableRowSelectionOnClick
+            pageSizeOptions={[10, 25, 50]}
+            initialState={{
+              pagination: { paginationModel: { pageSize: 25, page: 0 } },
+              sorting: { sortModel: [{ field: 'date', sort: 'desc' }] },
+            }}
+          />
+        </Paper>
+      )}
 
       <Box className="print-only print-table">
         <Typography variant="h6" gutterBottom>
-          Отчёт по движениям средств
+          {reportTab === 0 ? 'Отчёт по движениям средств' : 'Отчёт по операциям'}
         </Typography>
         <Typography className="print-meta">
           Дата формирования: {nowLabel}
           <br />
           Период: {periodLabel}
-          <br />
-          Группировка: {groupBy === 'category' ? 'по категориям' : 'по счетам'}
         </Typography>
-        <table>
-          <thead>
-            <tr>
-              <th>{groupBy === 'category' ? 'Категория' : 'Счёт'}</th>
-              <th>Доход</th>
-              <th>Расход</th>
-              <th>Итог</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.name}</td>
-                <td>{formatCurrency(r.income)}</td>
-                <td>{formatCurrency(r.expense)}</td>
-                <td>{formatCurrency(r.net)}</td>
+        {reportTab === 0 ? (
+          <table>
+            <thead>
+              <tr>
+                <th>{groupBy === 'category' ? 'Категория' : 'Счёт'}</th>
+                <th>Доход</th>
+                <th>Расход</th>
+                <th>Итог</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.name}</td>
+                  <td>{formatCurrency(r.income)}</td>
+                  <td>{formatCurrency(r.expense)}</td>
+                  <td>{formatCurrency(r.net)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Категория</th>
+                <th>Доход</th>
+                <th>Расход</th>
+                <th>Итог</th>
+              </tr>
+            </thead>
+            <tbody>
+              {opsRows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.category}</td>
+                  <td>{formatCurrency(r.income)}</td>
+                  <td>{formatCurrency(r.expense)}</td>
+                  <td>{formatCurrency(r.net)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
         <Typography className="print-summary">
           Итого по периоду — доход: {formatCurrency(summary.income)}, расход: {formatCurrency(summary.expense)},
           итог: {formatCurrency(summary.net)}.

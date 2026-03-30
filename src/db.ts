@@ -30,6 +30,7 @@ export interface Transaction {
   accountId: number
   categoryId: number
   memberId?: number
+  goalId?: number
   amount: number
   type: TransactionType
   description?: string
@@ -76,7 +77,17 @@ export class FamilyFinanceDB extends Dexie {
       members: '++id, name, role',
       accounts: '++id, name, type, ownerId',
       categories: '++id, name, type, parentId',
-      transactions: '++id, date, accountId, categoryId, type, memberId',
+      transactions: '++id, date, accountId, categoryId, type, memberId, goalId',
+      budgets: '++id, categoryId',
+      goals: '++id, name, dueDate, categoryId',
+    })
+
+    // Version 3: index for goals funding via operations (goalId)
+    this.version(3).stores({
+      members: '++id, name, role',
+      accounts: '++id, name, type, ownerId',
+      categories: '++id, name, type, parentId',
+      transactions: '++id, date, accountId, categoryId, type, memberId, goalId',
       budgets: '++id, categoryId',
       goals: '++id, name, dueDate, categoryId',
     })

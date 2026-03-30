@@ -246,6 +246,7 @@ const BudgetsPage = () => {
     const m = new Map<number, number>()
     for (const t of data?.txs ?? []) {
       if (t.type !== 'expense') continue
+      if (t.isPlanned) continue
       if (!t.date.startsWith(month)) continue
       m.set(t.categoryId, (m.get(t.categoryId) ?? 0) + t.amount)
     }
@@ -255,13 +256,15 @@ const BudgetsPage = () => {
   const budgetRows = useMemo(() => {
     return (data?.budgets ?? []).map((b) => {
       const spent = spentByCategory.get(b.categoryId) ?? 0
-      const pct = b.amountPerMonth > 0 ? Math.min(100, Math.round((spent / b.amountPerMonth) * 100)) : 0
+      const pctRaw = b.amountPerMonth > 0 ? (spent / b.amountPerMonth) * 100 : 0
+      const pct = Math.min(100, Math.round(pctRaw))
       return {
         id: b.id!,
         category: catNameById.get(b.categoryId) ?? `#${b.categoryId}`,
         amountPerMonth: formatCurrency(b.amountPerMonth),
         spent: formatCurrency(spent),
         pct,
+        rawPct: pctRaw,
         raw: b,
       }
     })
@@ -269,7 +272,8 @@ const BudgetsPage = () => {
 
   const goalRows = useMemo(() => {
     return (data?.goals ?? []).map((g) => {
-      const pct = g.targetAmount > 0 ? Math.min(100, Math.round((g.currentAmount / g.targetAmount) * 100)) : 0
+      const pctRaw = g.targetAmount > 0 ? (g.currentAmount / g.targetAmount) * 100 : 0
+      const pct = Math.min(100, Math.round(pctRaw))
       return {
         id: g.id!,
         name: g.name,
@@ -278,6 +282,7 @@ const BudgetsPage = () => {
         dueDate: g.dueDate ?? '—',
         category: g.categoryId ? catNameById.get(g.categoryId) ?? `#${g.categoryId}` : '—',
         pct,
+        rawPct: pctRaw,
         raw: g,
       }
     })
@@ -300,7 +305,17 @@ const BudgetsPage = () => {
         width: 200,
         renderCell: (p) => (
           <Box sx={{ width: '100%' }}>
-            <LinearProgress variant="determinate" value={Number(p.value) || 0} />
+            <LinearProgress
+              variant="determinate"
+              value={Number(p.value) || 0}
+              sx={{
+                height: 10,
+                '& .MuiLinearProgress-bar': {
+                  backgroundColor:
+                    (p.row as any).rawPct >= 90 ? '#d32f2f' : (p.row as any).rawPct >= 70 ? '#ed6c02' : '#2e7d32',
+                },
+              }}
+            />
             <Typography variant="caption" color="text.secondary">
               {p.value}%
             </Typography>
@@ -352,7 +367,16 @@ const BudgetsPage = () => {
         width: 200,
         renderCell: (p) => (
           <Box sx={{ width: '100%' }}>
-            <LinearProgress variant="determinate" value={Number(p.value) || 0} />
+            <LinearProgress
+              variant="determinate"
+              value={Number(p.value) || 0}
+              sx={{
+                height: 10,
+                '& .MuiLinearProgress-bar': {
+                  backgroundColor: (p.row as any).rawPct >= 100 ? '#2e7d32' : (p.row as any).rawPct >= 60 ? '#ed6c02' : '#7b1fa2',
+                },
+              }}
+            />
             <Typography variant="caption" color="text.secondary">
               {p.value}%
             </Typography>
@@ -508,6 +532,27 @@ const BudgetsPage = () => {
               }
               inputProps={{ min: 0, step: 1 }}
             />
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+              {[500, 1000, 1500, 2000, 5000].map((amt) => (
+                <Button
+                  key={amt}
+                  size="small"
+                  variant="outlined"
+                  onClick={() =>
+                    setGoalProgressDlg((prev) =>
+                      prev.form
+                        ? {
+                            open: true,
+                            form: { ...prev.form, delta: amt },
+                          }
+                        : prev,
+                    )
+                  }
+                >
+                  {amt} ₽
+                </Button>
+              ))}
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>

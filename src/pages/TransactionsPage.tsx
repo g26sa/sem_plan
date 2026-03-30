@@ -46,12 +46,13 @@ function TxDialog({
   initial?: TxForm
 }) {
   const catalogs = useLiveQuery(async () => {
-    const [accounts, categories, members] = await Promise.all([
+    const [accounts, categories, members, goals] = await Promise.all([
       db.accounts.toArray(),
       db.categories.toArray(),
       db.members.toArray(),
+      db.goals.toArray(),
     ])
-    return { accounts, categories, members }
+    return { accounts, categories, members, goals }
   }, [])
 
   const [form, setForm] = useState<TxForm>(
@@ -60,6 +61,7 @@ function TxDialog({
       type: 'expense',
       accountId: 0,
       categoryId: 0,
+      goalId: undefined,
       memberId: undefined,
       amount: 0,
       description: '',
@@ -76,6 +78,7 @@ function TxDialog({
           type: 'expense',
           accountId: 0,
           categoryId: 0,
+          goalId: undefined,
           memberId: undefined,
           amount: 0,
           description: '',
@@ -100,19 +103,82 @@ function TxDialog({
 
   const handleSave = async () => {
     if (!canSave) return
+
+    const month = form.date.slice(0, 7)
+    const newGoalId = form.goalId || undefined
+    const oldTx = form.id != null ? await db.transactions.get(form.id) : undefined
+    const oldGoalId = oldTx?.goalId || undefined
+
+    const affectsBudget = form.type === 'expense' && !form.isPlanned
+    if (affectsBudget) {
+      const budget = await db.budgets.where('categoryId').equals(form.categoryId).first()
+      if (budget && budget.amountPerMonth > 0) {
+        const related = await db.transactions.where('categoryId').equals(form.categoryId).toArray()
+        let spent = related
+          .filter((t) => t.type === 'expense' && !t.isPlanned && t.date.startsWith(month))
+          .reduce((sum, t) => sum + t.amount, 0)
+
+        if (
+          oldTx &&
+          oldTx.type === 'expense' &&
+          !oldTx.isPlanned &&
+          oldTx.categoryId === form.categoryId &&
+          oldTx.date.startsWith(month)
+        ) {
+          spent -= oldTx.amount
+        }
+
+        const after = spent + form.amount
+        if (after > budget.amountPerMonth) {
+          const remain = Math.max(0, budget.amountPerMonth - spent)
+          alert(`Лимит бюджета превышен. Осталось по категории в этом месяце: ${remain} ₽`)
+          return
+        }
+      }
+    }
+
+    const applyGoalDelta = async (goalId: number | undefined, delta: number) => {
+      if (!goalId || delta === 0) return
+      const g = await db.goals.get(goalId)
+      if (!g) return
+      const next = Math.max(0, g.currentAmount + delta)
+      await db.goals.update(goalId, { currentAmount: next })
+    }
+
     const payload: Omit<Transaction, 'id'> = {
       date: form.date,
       type: form.type,
       accountId: form.accountId,
       categoryId: form.categoryId,
       memberId: form.memberId || undefined,
+      goalId: newGoalId,
       amount: form.amount,
       description: form.description?.trim() || undefined,
       counterparty: form.counterparty?.trim() || undefined,
       isPlanned: !!form.isPlanned,
     }
-    if (form.id != null) await db.transactions.update(form.id, payload)
-    else await db.transactions.add(payload)
+
+    const oldGoalAffects = !!oldTx?.goalId && !oldTx.isPlanned && oldTx.type === 'expense'
+    const newGoalAffects = !!newGoalId && !form.isPlanned && form.type === 'expense'
+
+    await db.transaction('rw', db.transactions, db.goals, async () => {
+      if (form.id != null) await db.transactions.update(form.id, payload)
+      else await db.transactions.add(payload)
+
+      if (oldGoalAffects && newGoalAffects) {
+        if (oldGoalId === newGoalId) {
+          await applyGoalDelta(oldGoalId, form.amount - (oldTx?.amount ?? 0))
+        } else {
+          await applyGoalDelta(oldGoalId, -(oldTx?.amount ?? 0))
+          await applyGoalDelta(newGoalId, form.amount)
+        }
+      } else if (oldGoalAffects && !newGoalAffects) {
+        await applyGoalDelta(oldGoalId, -(oldTx?.amount ?? 0))
+      } else if (!oldGoalAffects && newGoalAffects) {
+        await applyGoalDelta(newGoalId, form.amount)
+      }
+    })
+
     onClose(true)
   }
 
@@ -142,6 +208,7 @@ function TxDialog({
                     ...p,
                     type: e.target.value as TransactionType,
                     categoryId: 0,
+                    goalId: e.target.value === 'expense' ? p.goalId : undefined,
                   }))
                 }
               >
@@ -242,6 +309,31 @@ function TxDialog({
               </Select>
             </FormControl>
           </Grid>
+          <Grid item xs={12} md={4}>
+            <FormControl fullWidth>
+              <InputLabel>Цель (пополнение)</InputLabel>
+              <Select
+                label="Цель (пополнение)"
+                value={form.goalId ?? 0}
+                onChange={(e) => {
+                  const nextGoalId = Number(e.target.value) || undefined
+                  setForm((p) => ({
+                    ...p,
+                    goalId: nextGoalId,
+                    type: nextGoalId ? 'expense' : p.type,
+                    categoryId: nextGoalId ? 0 : p.categoryId,
+                  }))
+                }}
+              >
+                <MenuItem value={0}>—</MenuItem>
+                {(catalogs?.goals ?? []).map((g) => (
+                  <MenuItem key={g.id} value={g.id}>
+                    {g.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
           <Grid item xs={12} md={12}>
             <FormControlLabel
               control={
@@ -267,12 +359,13 @@ function TxDialog({
 
 const TransactionsPage = () => {
   const catalogs = useLiveQuery(async () => {
-    const [accounts, categories, members] = await Promise.all([
+    const [accounts, categories, members, goals] = await Promise.all([
       db.accounts.toArray(),
       db.categories.toArray(),
       db.members.toArray(),
+      db.goals.toArray(),
     ])
-    return { accounts, categories, members }
+    return { accounts, categories, members, goals }
   }, [])
 
   const transactions = useLiveQuery(
@@ -311,6 +404,12 @@ const TransactionsPage = () => {
     return m
   }, [catalogs?.members])
 
+  const goalById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const g of catalogs?.goals ?? []) if (g.id != null) m.set(g.id, g.name)
+    return m
+  }, [catalogs?.goals])
+
   const rows = useMemo(() => {
     const txs = transactions ?? []
     const qq = q.trim().toLowerCase()
@@ -341,6 +440,7 @@ const TransactionsPage = () => {
           account: acc?.name ?? `#${t.accountId}`,
           category: catById.get(t.categoryId) ?? `#${t.categoryId}`,
           member: t.memberId ? memberById.get(t.memberId) ?? `#${t.memberId}` : '—',
+          goal: t.goalId ? goalById.get(t.goalId) ?? `#${t.goalId}` : '—',
           planned: !!t.isPlanned,
           amountSigned: txSign(t.type, t.amount),
           amount: t.amount,
@@ -363,6 +463,7 @@ const TransactionsPage = () => {
     accById,
     catById,
     memberById,
+    goalById,
   ])
 
   const columns = useMemo<GridColDef[]>(
@@ -382,6 +483,7 @@ const TransactionsPage = () => {
       { field: 'account', headerName: 'Счёт', width: 170 },
       { field: 'category', headerName: 'Категория', width: 200 },
       { field: 'member', headerName: 'Кто', width: 140 },
+      { field: 'goal', headerName: 'Цель', width: 180 },
       {
         field: 'planned',
         headerName: 'План',
