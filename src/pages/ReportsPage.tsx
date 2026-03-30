@@ -40,6 +40,26 @@ function safeFilename(name: string) {
   return name.replaceAll(/[<>:"/\\|?*]/g, '-').replaceAll(/\s+/g, ' ').trim()
 }
 
+async function saveBlobToChosenDirectory(fileName: string, blob: Blob) {
+  const w = window as any
+  // File System Access API: https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API
+  if (typeof w.showDirectoryPicker === 'function') {
+    const dirHandle = await w.showDirectoryPicker()
+    const fileHandle = await dirHandle.getFileHandle(fileName, { create: true })
+    const writable = await fileHandle.createWritable()
+    await writable.write(blob)
+    await writable.close()
+  } else {
+    // Fallback: regular download dialog (no directory selection available).
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+}
+
 type BackupDataV1 = {
   version: 1
   exportedAt: string
@@ -228,12 +248,16 @@ const ReportsPage = () => {
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const fileName = safeFilename(
+      `family-finance-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`,
+    )
+    await saveBlobToChosenDirectory(fileName, blob)
+
+    // Open immediately (JSON will usually open in-browser).
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `family-finance-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    window.open(url, '_blank', 'noopener,noreferrer')
+    // Note: URL revocation can break preview in some browsers; keep it for a short time.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
 
   const importBackup = async (file: File) => {
@@ -437,13 +461,14 @@ const ReportsPage = () => {
     })
 
     const blob = await Packer.toBlob(doc)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
+
     const title = reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств'
-    a.download = safeFilename(`${title} (${periodLabel}).docx`)
-    a.click()
-    URL.revokeObjectURL(url)
+    const fileName = safeFilename(`${title} (${periodLabel}).docx`)
+    await saveBlobToChosenDirectory(fileName, blob)
+
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener,noreferrer')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
 
   return (
