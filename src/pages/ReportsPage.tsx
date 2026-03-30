@@ -35,31 +35,10 @@ import {
 import { useMemo, useRef, useState } from 'react'
 import { db, type TransactionType } from '../db'
 import { formatCurrency, startOfMonthISO, todayISO } from '../utils/format'
+import { saveBlobToDirectory } from '../utils/saveToDirectory'
 
 function safeFilename(name: string) {
   return name.replaceAll(/[<>:"/\\|?*]/g, '-').replaceAll(/\s+/g, ' ').trim()
-}
-
-async function saveBlobToChosenDirectory(fileName: string, blob: Blob) {
-  const w = window as any
-  // File System Access API: https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API
-  if (typeof w.showDirectoryPicker === 'function') {
-    const dirHandle = await w.showDirectoryPicker()
-    const fileHandle = await dirHandle.getFileHandle(fileName, { create: true })
-    const writable = await fileHandle.createWritable()
-    await writable.write(blob)
-    await writable.close()
-  } else {
-    // Fallback: regular download dialog (no directory selection available).
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName
-    a.click()
-    // Не отзываем объектный URL сразу: иногда браузер успевает не завершить загрузку
-    // и вместо скачивания открывает просмотрщик.
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }
 }
 
 type BackupDataV1 = {
@@ -250,10 +229,19 @@ const ReportsPage = () => {
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const fileName = safeFilename(
+    const name = safeFilename(
       `family-finance-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`,
     )
-    await saveBlobToChosenDirectory(fileName, blob)
+
+    const saved = await saveBlobToDirectory(blob, name)
+    if (!saved) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }
 
   const importBackup = async (file: File) => {
@@ -457,10 +445,18 @@ const ReportsPage = () => {
     })
 
     const blob = await Packer.toBlob(doc)
-
     const title = reportTab === 1 ? 'Отчёт по операциям' : 'Отчёт по движениям средств'
-    const fileName = safeFilename(`${title} (${periodLabel}).docx`)
-    await saveBlobToChosenDirectory(fileName, blob)
+    const filename = safeFilename(`${title} (${periodLabel}).docx`)
+
+    const saved = await saveBlobToDirectory(blob, filename)
+    if (!saved) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }
 
   return (
