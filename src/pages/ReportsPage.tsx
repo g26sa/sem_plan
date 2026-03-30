@@ -56,7 +56,9 @@ async function saveBlobToChosenDirectory(fileName: string, blob: Blob) {
     a.href = url
     a.download = fileName
     a.click()
-    URL.revokeObjectURL(url)
+    // Не отзываем объектный URL сразу: иногда браузер успевает не завершить загрузку
+    // и вместо скачивания открывает просмотрщик.
+    setTimeout(() => URL.revokeObjectURL(url), 30_000)
   }
 }
 
